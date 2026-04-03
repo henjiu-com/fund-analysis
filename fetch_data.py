@@ -709,22 +709,51 @@ def main():
         n = next(iter(v['periods'].values()), {}).get('total', 0) if v.get('periods') else 0
         print(f"    {k}: {n} 只")
 
-    # ——— 写出 JS 文件 ———
+    # ——— 生成内联数据块 ———
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    header = f'生成时间: {now_str}  报告期: {report_date}  共 {len(all_funds)} 只基金'
 
-    print(f"\n[fetch_data] 写出数据文件...")
-    write_js('data.js',           'FUNDS_DATA',          all_funds, header)
-    write_js('classification.js', 'CLASSIFICATION_DATA', cls_data,  f'报告期: {report_date}')
-    write_js('cls_history.js',    'CLS_HISTORY',         [],        '历史快照（暂留空，后续可补充多期数据）')
-    write_js('nav_curves.js',     'NAV_CURVES',          {},        '净值曲线（暂留空，后续可查询时序数据）')
+    def js_block(var_name, data, comment=''):
+        lines = []
+        if comment:
+            lines.append(f'// {comment}')
+        lines.append(f'window.{var_name} = {json.dumps(data, ensure_ascii=False, separators=(",", ":"))};')
+        return '\n'.join(lines)
 
-    # 追加更新时间戳到 data.js
-    with open(os.path.join(OUTPUT_DIR, 'data.js'), 'a', encoding='utf-8') as f:
-        f.write(f"\nwindow.DATA_UPDATE_TIME = '{now_str}';\n")
+    inline_script = '\n'.join([
+        js_block('FUNDS_DATA', all_funds,
+                 f'生成时间: {now_str}  报告期: {report_date}  共 {len(all_funds)} 只基金'),
+        f"window.DATA_UPDATE_TIME = '{now_str}';",
+        js_block('CLASSIFICATION_DATA', cls_data, f'报告期: {report_date}'),
+        js_block('CLS_HISTORY', [], '历史快照（暂留空）'),
+        js_block('NAV_CURVES', {}, '净值曲线（暂留空）'),
+    ])
 
+    # ——— 注入到 index.html，生成自包含的 dashboard.html ———
+    template_path = os.path.join(OUTPUT_DIR, 'index.html')
+    output_path   = os.path.join(OUTPUT_DIR, 'dashboard.html')
+
+    with open(template_path, encoding='utf-8') as f:
+        html = f.read()
+
+    SCRIPT_BLOCK = (
+        '<script src="data.js"></script>\n'
+        '<script src="classification.js"></script>\n'
+        '<script src="cls_history.js"></script>\n'
+        '<script src="nav_curves.js"></script>'
+    )
+    injected = html.replace(SCRIPT_BLOCK, f'<script>\n{inline_script}\n</script>')
+
+    if injected == html:
+        print("[WARN] 未找到 <script src> 占位块，dashboard.html 可能无数据", file=sys.stderr)
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(injected)
+
+    size_kb = os.path.getsize(output_path) // 1024
+    print(f"\n[fetch_data] 写出 dashboard.html ({size_kb} KB)")
     print(f"\n[fetch_data] 完成！共 {len(all_funds)} 只基金，{len(cls_data)} 个分类。")
-    print(f"  刷新数据: python3 fetch_data.py [--date YYYY-MM-DD]")
+    print(f"  打开仪表盘: open {output_path}")
+    print(f"  刷新数据:   python3 fetch_data.py [--date YYYY-MM-DD]")
 
 
 if __name__ == '__main__':
